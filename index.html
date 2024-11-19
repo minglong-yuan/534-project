@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地图区域计算器</title>
+    
+    <!-- 引入React和ReactDOM -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- 引入Babel用于JSX转换 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    
+    <!-- 引入Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 20px auto;
+            max-width: 1000px;
+            padding: 20px;
+        }
+        
+        .header {
+            border-bottom: 1px solid #eee;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+        
+        .title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .alert {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 10px 0;
+            padding: 10px;
+        }
+        
+        .button {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+            padding: 8px 16px;
+        }
+        
+        .button:hover {
+            background: #f8f9fa;
+        }
+        
+        canvas {
+            border: 1px solid #ddd;
+            cursor: crosshair;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const MapAreaCalculator = () => {
+            const [points, setPoints] = React.useState([]);
+            const [image, setImage] = React.useState(null);
+            const canvasRef = React.useRef(null);
+            const [message, setMessage] = React.useState('请上传地图图片');
+            
+            // 计算两点之间的距离
+            const distance = (p1, p2) => {
+                return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+            };
+
+            // 计算多边形面积
+            const calculateArea = (pts) => {
+                let area = 0;
+                for (let i = 0; i < pts.length; i++) {
+                    const j = (i + 1) % pts.length;
+                    area += pts[i].x * pts[j].y;
+                    area -= pts[j].x * pts[i].y;
+                }
+                return Math.abs(area / 2);
+            };
+
+            // 计算外围区域的点
+            const calculateOuterPoints = (innerPoints, scaleFactor) => {
+                if (innerPoints.length < 4) return [];
+                
+                const originalArea = calculateArea(innerPoints);
+                const targetArea = originalArea * scaleFactor;
+                
+                // 计算缩放因子
+                const expansionFactor = Math.sqrt(scaleFactor) - 1;
+                
+                // 计算中心点
+                const center = {
+                    x: innerPoints.reduce((sum, p) => sum + p.x, 0) / innerPoints.length,
+                    y: innerPoints.reduce((sum, p) => sum + p.y, 0) / innerPoints.length
+                };
+                
+                // 向外扩展点
+                return innerPoints.map(point => {
+                    const vectorToCenter = {
+                        x: center.x - point.x,
+                        y: center.y - point.y
+                    };
+                    const distance = Math.sqrt(vectorToCenter.x * vectorToCenter.x + vectorToCenter.y * vectorToCenter.y);
+                    const scaledDistance = distance * expansionFactor;
+                    
+                    return {
+                        x: point.x - (vectorToCenter.x / distance) * scaledDistance,
+                        y: point.y - (vectorToCenter.y / distance) * scaledDistance
+                    };
+                });
+            };
+
+            // 处理图片上传
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            setImage(img);
+                            setPoints([]);
+                            setMessage('请在地图上点击选择4个点');
+                        };
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            // 处理画布点击
+            const handleCanvasClick = (e) => {
+                if (points.length >= 4) return;
+                
+                const canvas = canvasRef.current;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                setPoints([...points, { x, y }]);
+                
+                if (points.length === 3) {
+                    setMessage('四个点已选择完成');
+                }
+            };
+
+            // 绘制画布
+            const drawCanvas = () => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                
+                // 清除画布
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // 绘制地图
+                if (image) {
+                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                }
+                
+                if (points.length === 4) {
+                    // 计算并绘制外围区域
+                    const outerPoints = calculateOuterPoints(points, 3);
+                    
+                    // 绘制外围区域
+                    ctx.beginPath();
+                    ctx.moveTo(outerPoints[0].x, outerPoints[0].y);
+                    outerPoints.forEach((point) => {
+                        ctx.lineTo(point.x, point.y);
+                    });
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(0, 0, 255, 0.1)';
+                    ctx.fill();
+                    ctx.strokeStyle = 'blue';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                
+                // 绘制原始区域和点
+                if (points.length > 0) {
+                    // 绘制连线和填充区域
+                    if (points.length > 1) {
+                        ctx.beginPath();
+                        ctx.moveTo(points[0].x, points[0].y);
+                        points.forEach((point) => {
+                            ctx.lineTo(point.x, point.y);
+                        });
+                        if (points.length === 4) {
+                            ctx.closePath();
+                            ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+                            ctx.fill();
+                            ctx.strokeStyle = 'red';
+                            ctx.lineWidth = 2;
+                            ctx.stroke();
+                            
+                            // 计算和显示面积
+                            const area = calculateArea(points);
+                            setMessage(`内部区域面积: ${area.toFixed(2)} 平方像素, 外围区域面积: ${(area * 3).toFixed(2)} 平方像素`);
+                        }
+                    }
+                    
+                    // 绘制点和序号
+                    points.forEach((point, index) => {
+                        ctx.beginPath();
+                        ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+                        ctx.fillStyle = 'red';
+                        ctx.fill();
+                        
+                        ctx.fillStyle = 'white';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(index + 1, point.x + 8, point.y + 8);
+                    });
+                }
+            };
+
+            // 重置功能
+            const handleReset = () => {
+                setPoints([]);
+                setMessage('请在地图上点击选择4个点');
+            };
+
+            React.useEffect(() => {
+                drawCanvas();
+            }, [points, image]);
+
+            return (
+                <div className="card">
+                    <div className="header">
+                        <h1 className="title">地图区域计算器</h1>
+                    </div>
+                    <div>
+                        <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleImageUpload}
+                            className="mb-4"
+                        />
+                        <button 
+                            onClick={handleReset}
+                            className="button"
+                        >
+                            重置点
+                        </button>
+                    </div>
+                    
+                    <div className="alert">
+                        {message}
+                    </div>
+
+                    <canvas
+                        ref={canvasRef}
+                        width={800}
+                        height={600}
+                        onClick={handleCanvasClick}
+                        style={{ background: '#f0f0f0' }}
+                    />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<MapAreaCalculator />);
+    </script>
+</body>
+</html>
