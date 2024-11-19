@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Potential Hazard Zone Calculator</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+      .card {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        margin: 20px auto;
+        max-width: 1000px;
+        padding: 20px;
+      }
+
+      .header {
+        border-bottom: 1px solid #eee;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+      }
+
+      .title {
+        font-size: 24px;
+        font-weight: bold;
+        color: #333;
+      }
+
+      .alert {
+        background: #f8f9fa;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin: 10px 0;
+        padding: 10px;
+      }
+
+      .button {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-left: 10px;
+        padding: 8px 16px;
+      }
+
+      .button:hover {
+        background: #f8f9fa;
+      }
+
+      .floor-select {
+        padding: 8px;
+        margin: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        min-width: 100px;
+      }
+
+      .floor-upload {
+        margin: 20px 0;
+        padding: 20px;
+        border: 2px dashed #ddd;
+        border-radius: 8px;
+        background: #f8f9fa;
+      }
+
+      canvas {
+        border: 1px solid #ddd;
+        cursor: crosshair;
+        margin-top: 10px;
+      }
+
+      .floor-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 10px 0;
+      }
+
+      .floor-item {
+        background: #f0f0f0;
+        padding: 10px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .setup-container {
+        margin-bottom: 20px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const MultiFloorCalculator = () => {
+        const [floors, setFloors] = React.useState([]);
+        const [numFloors, setNumFloors] = React.useState(0);
+        const [setupComplete, setSetupComplete] = React.useState(false);
+        const [currentFloor, setCurrentFloor] = React.useState(null);
+        const [points, setPoints] = React.useState([]);
+        const [message, setMessage] = React.useState(
+          "Please set the number of floors first"
+        );
+        const canvasRef = React.useRef(null);
+
+        const handleNumFloorsSubmit = () => {
+          if (numFloors > 0) {
+            setFloors(Array(parseInt(numFloors)).fill(null));
+            setMessage("Please upload floor plans for each level");
+          }
+        };
+
+        const handleFloorUpload = (index, file) => {
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const img = new Image();
+              img.onload = () => {
+                const newFloors = [...floors];
+                newFloors[index] = img;
+                setFloors(newFloors);
+
+                if (newFloors.every((floor) => floor !== null)) {
+                  setSetupComplete(true);
+                  setCurrentFloor(0);
+                  setMessage(
+                    "All floor plans uploaded. Please select a floor to analyze"
+                  );
+                }
+              };
+              img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+          }
+        };
+
+        const handleFloorChange = (floorIndex) => {
+          setCurrentFloor(floorIndex);
+          setPoints([]);
+          setMessage(
+            `Select 4 points on Floor ${
+              floorIndex + 1
+            } to define the hazard zone`
+          );
+        };
+
+        const calculateArea = (pts) => {
+          let area = 0;
+          for (let i = 0; i < pts.length; i++) {
+            const j = (i + 1) % pts.length;
+            area += pts[i].x * pts[j].y;
+            area -= pts[j].x * pts[i].y;
+          }
+          return Math.abs(area / 2);
+        };
+
+        const calculateOuterPoints = (innerPoints, scaleFactor) => {
+          if (innerPoints.length < 4) return [];
+
+          const originalArea = calculateArea(innerPoints);
+          const targetArea = originalArea * scaleFactor;
+          const expansionFactor = Math.sqrt(scaleFactor) - 1;
+
+          const center = {
+            x:
+              innerPoints.reduce((sum, p) => sum + p.x, 0) / innerPoints.length,
+            y:
+              innerPoints.reduce((sum, p) => sum + p.y, 0) / innerPoints.length,
+          };
+
+          return innerPoints.map((point) => {
+            const vectorToCenter = {
+              x: center.x - point.x,
+              y: center.y - point.y,
+            };
+            const distance = Math.sqrt(
+              vectorToCenter.x * vectorToCenter.x +
+                vectorToCenter.y * vectorToCenter.y
+            );
+            const scaledDistance = distance * expansionFactor;
+
+            return {
+              x: point.x - (vectorToCenter.x / distance) * scaledDistance,
+              y: point.y - (vectorToCenter.y / distance) * scaledDistance,
+            };
+          });
+        };
+
+        const handleCanvasClick = (e) => {
+          if (!currentFloor !== null && points.length >= 4) return;
+
+          const canvas = canvasRef.current;
+          const rect = canvas.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+
+          setPoints([...points, { x, y }]);
+
+          if (points.length === 3) {
+            setMessage(`Four points selected on Floor ${currentFloor + 1}`);
+          }
+        };
+
+        const handleReset = () => {
+          setPoints([]);
+          setMessage(
+            `Select 4 points on Floor ${
+              currentFloor + 1
+            } to define the hazard zone`
+          );
+        };
+
+        const handleFullReset = () => {
+          setFloors([]);
+          setNumFloors(0);
+          setSetupComplete(false);
+          setCurrentFloor(null);
+          setPoints([]);
+          setMessage("Please set the number of floors first");
+        };
+
+        const drawCanvas = () => {
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+
+          const ctx = canvas.getContext("2d");
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (currentFloor !== null && floors[currentFloor]) {
+            ctx.drawImage(
+              floors[currentFloor],
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
+          }
+
+          if (points.length === 4) {
+            const outerPoints = calculateOuterPoints(points, 3);
+
+            ctx.beginPath();
+            ctx.moveTo(outerPoints[0].x, outerPoints[0].y);
+            outerPoints.forEach((point) => {
+              ctx.lineTo(point.x, point.y);
+            });
+            ctx.closePath();
+            ctx.fillStyle = "rgba(255, 165, 0, 0.2)"; // Orange for warning zone
+            ctx.fill();
+            ctx.strokeStyle = "#FF8C00"; // Dark orange
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+
+          if (points.length > 0) {
+            if (points.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(points[0].x, points[0].y);
+              points.forEach((point) => {
+                ctx.lineTo(point.x, point.y);
+              });
+              if (points.length === 4) {
+                ctx.closePath();
+                ctx.fillStyle = "rgba(255, 0, 0, 0.2)"; // Red for hazard zone
+                ctx.fill();
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                const area = calculateArea(points);
+                setMessage(
+                  `Floor ${currentFloor + 1} - Hazard Zone Area: ${area.toFixed(
+                    2
+                  )} sq px, Safety Buffer Zone: ${(area * 3).toFixed(2)} sq px`
+                );
+              }
+            }
+
+            points.forEach((point, index) => {
+              ctx.beginPath();
+              ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+              ctx.fillStyle = "red";
+              ctx.fill();
+
+              ctx.fillStyle = "white";
+              ctx.font = "12px Arial";
+              ctx.fillText(index + 1, point.x + 8, point.y + 8);
+            });
+          }
+        };
+
+        React.useEffect(() => {
+          drawCanvas();
+        }, [points, currentFloor, floors]);
+
+        return (
+          <div className="card">
+            <div className="header">
+              <h1 className="title">Potential Hazard Zone Calculator</h1>
+            </div>
+
+            {!setupComplete ? (
+              <div className="setup-container">
+                <div className="mb-4">
+                  <label className="block mb-2">Enter number of floors:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={numFloors}
+                    onChange={(e) => setNumFloors(e.target.value)}
+                    className="p-2 border rounded"
+                  />
+                  <button onClick={handleNumFloorsSubmit} className="button">
+                    Confirm
+                  </button>
+                </div>
+
+                {floors.length > 0 && (
+                  <div className="floor-list">
+                    {floors.map((floor, index) => (
+                      <div key={index} className="floor-item">
+                        <span>Floor {index + 1}:</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) =>
+                            handleFloorUpload(index, e.target.files[0])
+                          }
+                        />
+                        {floor && <span>✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div className="mb-4">
+                  <select
+                    value={currentFloor}
+                    onChange={(e) =>
+                      handleFloorChange(parseInt(e.target.value))
+                    }
+                    className="floor-select"
+                  >
+                    {floors.map((_, index) => (
+                      <option key={index} value={index}>
+                        Floor {index + 1}
+                      </option>
+                    ))}
+                  </select>
+                  <button onClick={handleReset} className="button">
+                    Reset Current Floor
+                  </button>
+                  <button onClick={handleFullReset} className="button">
+                    Reset All
+                  </button>
+                </div>
+
+                <div className="alert">{message}</div>
+
+                <canvas
+                  ref={canvasRef}
+                  width={800}
+                  height={600}
+                  onClick={handleCanvasClick}
+                  style={{ background: "#f0f0f0" }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<MultiFloorCalculator />);
+    </script>
+  </body>
+</html>
