@@ -279,7 +279,21 @@
             index: nearestSecurityIndex
           };
         };
+        // Sort points to create a proper polygon
+const sortPointsClockwise = (points) => {
+  // Find center point
+  const center = {
+    x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+    y: points.reduce((sum, p) => sum + p.y, 0) / points.length
+  };
 
+  // Sort points based on their angle from center
+  return [...points].sort((a, b) => {
+    const angleA = Math.atan2(a.y - center.y, a.x - center.x);
+    const angleB = Math.atan2(b.y - center.y, b.x - center.x);
+    return angleA - angleB;
+  });
+};
         // Generate notification messages
         const generateNotification = (personIndex, zoneType, zoneName, isSecurityAlert = false, securityInfo = null) => {
           if (isSecurityAlert) {
@@ -496,31 +510,32 @@
             updateAllNotifications();
           }
           else if (mode === 'addZone') {
-            const newPoints = [...currentPoints, { x, y }];
-            setCurrentPoints(newPoints);
-
-            if (newPoints.length === 4) {
-              const newZone = {
-                id: Date.now(),
-                points: newPoints,
-                name: `Zone ${(floorData[currentFloor]?.hazardZones?.length || 0) + 1}`
-              };
-
-              setFloorData(prev => ({
-                ...prev,
-                [currentFloor]: {
-                  ...prev[currentFloor],
-                  hazardZones: [...(prev[currentFloor]?.hazardZones || []), newZone]
-                }
-              }));
-
-              setCurrentPoints([]);
-              setMessage("New hazard zone added - Updating security response");
-              // Security notification will be handled by useEffect
-            } else {
-              setMessage(`Select point ${newPoints.length + 1} of 4 for hazard zone`);
-            }
-          }
+  const newPoints = [...currentPoints, { x, y }];
+  setCurrentPoints(newPoints);
+  
+  if (newPoints.length === 4) {
+    // Sort points before creating the zone
+    const sortedPoints = sortPointsClockwise(newPoints);
+    const newZone = {
+      id: Date.now(),
+      points: sortedPoints,
+      name: `Zone ${(floorData[currentFloor]?.hazardZones?.length || 0) + 1}`
+    };
+    
+    setFloorData(prev => ({
+      ...prev,
+      [currentFloor]: {
+        ...prev[currentFloor],
+        hazardZones: [...(prev[currentFloor]?.hazardZones || []), newZone]
+      }
+    }));
+    
+    setCurrentPoints([]);
+    setMessage("New hazard zone added - Updating security response");
+  } else {
+    setMessage(`Select point ${newPoints.length + 1} of 4 for hazard zone`);
+  }
+}
         };
 
         const removeZone = (zoneId) => {
