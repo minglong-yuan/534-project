@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Multi-Floor Hazard Zone Calculator</title>
+    <title>Multi-Floor Hazard Zone Calculator with Security</title>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -133,6 +133,11 @@
         border-left-color: #22c55e;
       }
 
+      .notification.security {
+        background: #e0e7ff;
+        border-left-color: #4f46e5;
+      }
+
       .mode-button {
         background: #fff;
         border: 1px solid #ddd;
@@ -200,30 +205,6 @@
         max-width: 800px;
         margin: 0 auto;
       }
-
-      .legend {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        background: rgba(255, 255, 255, 0.9);
-        padding: 10px;
-        border-radius: 4px;
-        border: 1px solid #ddd;
-        font-size: 12px;
-      }
-
-      .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin: 4px 0;
-      }
-
-      .legend-color {
-        width: 16px;
-        height: 16px;
-        border-radius: 50%;
-      }
     </style>
   </head>
   <body>
@@ -235,14 +216,87 @@
         const [numFloors, setNumFloors] = React.useState(0);
         const [setupComplete, setSetupComplete] = React.useState(false);
         const [currentFloor, setCurrentFloor] = React.useState(null);
-        const [mode, setMode] = React.useState('none');
+        const [mode, setMode] = React.useState('none'); // 'none', 'addPeople', 'addZone', 'addSecurity'
         const [currentPoints, setCurrentPoints] = React.useState([]);
         const [message, setMessage] = React.useState("Set number of floors to start");
         const [notifications, setNotifications] = React.useState([]);
         const canvasRef = React.useRef(null);
         const [floorData, setFloorData] = React.useState({});
 
-        const generateNotification = (personIndex, zoneType, zoneName) => {
+        // Calculate distance between two points
+        const calculateDistance = (point1, point2) => {
+          const dx = point1.x - point2.x;
+          const dy = point1.y - point2.y;
+          return Math.sqrt(dx * dx + dy * dy);
+        };
+
+        // Find nearest security personnel
+        const findNearestSecurity = (zoneCenter) => {
+          let nearestSecurity = null;
+          let nearestSecurityIndex = -1;
+          let minDistance = Infinity;
+          let securityFloor = null;
+
+          // Calculate zone center
+          if (!zoneCenter) {
+            return { security: null, floor: null, index: -1 };
+          }
+
+          // First check current floor
+          const currentFloorSecurity = floorData[currentFloor]?.security || [];
+          currentFloorSecurity.forEach((security, index) => {
+            const distance = calculateDistance(zoneCenter, security);
+            if (distance < minDistance) {
+              minDistance = distance;
+              nearestSecurity = security;
+              nearestSecurityIndex = index;
+              securityFloor = currentFloor;
+            }
+          });
+
+          // If no security on current floor, check other floors
+          if (!nearestSecurity) {
+            Object.entries(floorData).forEach(([floorIndex, data]) => {
+              if (floorIndex !== currentFloor.toString() && data.security) {
+                data.security.forEach((security, index) => {
+                  // Add floor difference to distance calculation
+                  const floorDiff = Math.abs(currentFloor - parseInt(floorIndex)) * 100;
+                  const distance = floorDiff;
+                  if (distance < minDistance) {
+                    minDistance = distance;
+                    nearestSecurity = security;
+                    nearestSecurityIndex = index;
+                    securityFloor = parseInt(floorIndex);
+                  }
+                });
+              }
+            });
+          }
+
+          return {
+            security: nearestSecurity,
+            floor: securityFloor,
+            index: nearestSecurityIndex
+          };
+        };
+
+        // Generate notification messages
+        const generateNotification = (personIndex, zoneType, zoneName, isSecurityAlert = false, securityInfo = null) => {
+          if (isSecurityAlert) {
+            if (!securityInfo || securityInfo.index === -1) {
+              return {
+                message: `🚨 ALERT: No available security personnel to respond to ${zoneName}!`,
+                type: 'security',
+                timestamp: Date.now()
+              };
+            }
+            return {
+              message: `👮 Security Alert: Security ${securityInfo.index + 1} on Floor ${securityInfo.floor + 1} requested to respond to ${zoneName}`,
+              type: 'security',
+              timestamp: Date.now()
+            };
+          }
+
           switch(zoneType) {
             case 'hazard':
               return {
@@ -263,6 +317,18 @@
                 timestamp: Date.now()
               };
           }
+        };
+
+        // Add security notification for a hazard zone
+        const addSecurityNotification = (zone) => {
+          const zoneCenter = {
+            x: zone.points.reduce((sum, p) => sum + p.x, 0) / zone.points.length,
+            y: zone.points.reduce((sum, p) => sum + p.y, 0) / zone.points.length
+          };
+
+          const nearest = findNearestSecurity(zoneCenter);
+          const notification = generateNotification(null, null, zone.name, true, nearest);
+          setNotifications(prev => [...prev, { ...notification, id: `security-${Date.now()}` }]);
         };
 
         const isPointInPolygon = (point, polygon) => {
@@ -311,22 +377,42 @@
         };
 
         const updateAllNotifications = () => {
-          if (currentFloor === null || !floorData[currentFloor]?.people) return;
+          if (currentFloor === null) return;
 
-          const currentPeople = floorData[currentFloor].people;
-          const newNotifications = currentPeople.map((person, index) => {
+          const currentPeople = floorData[currentFloor]?.people || [];
+          const newNotifications = [];
+
+          // Update people notifications
+          currentPeople.forEach((person, index) => {
             const zone = getPointZone(person, currentFloor);
-            return {
-              id: person.id,
-              ...generateNotification(index, zone.type, zone.zoneName)
+            if (zone.type === 'hazard' || zone.type === 'buffer') {
+              newNotifications.push({
+                id: person.id,
+                ...generateNotification(index, zone.type, zone.zoneName)
+              });
+            }
+          });
+
+          // Add security notifications for all hazard zones
+          floorData[currentFloor]?.hazardZones?.forEach(zone => {
+            const zoneCenter = {
+              x: zone.points.reduce((sum, p) => sum + p.x, 0) / zone.points.length,
+              y: zone.points.reduce((sum, p) => sum + p.y, 0) / zone.points.length
             };
+            const nearest = findNearestSecurity(zoneCenter);
+            newNotifications.push({
+              id: `security-${zone.id}`,
+              ...generateNotification(null, null, zone.name, true, nearest)
+            });
           });
 
           setNotifications(newNotifications);
         };
 
         React.useEffect(() => {
-          updateAllNotifications();
+          if (floorData[currentFloor]?.hazardZones) {
+            updateAllNotifications();
+          }
         }, [floorData[currentFloor]?.hazardZones]);
 
         const handleNumFloorsSubmit = () => {
@@ -348,13 +434,13 @@
 
                 setFloorData(prev => ({
                   ...prev,
-                  [index]: { people: [], hazardZones: [] }
+                  [index]: { people: [], security: [], hazardZones: [] }
                 }));
 
                 if (newFloors.every((floor) => floor !== null)) {
                   setSetupComplete(true);
                   setCurrentFloor(0);
-                  setMessage("Select mode to start adding people or hazard zones");
+                  setMessage("Select mode to start adding people, security, or hazard zones");
                 }
               };
               img.src = event.target.result;
@@ -387,12 +473,27 @@
             });
 
             const zone = getPointZone(newPerson, currentFloor);
-            const notification = generateNotification(
-              (floorData[currentFloor]?.people?.length || 0),
-              zone.type,
-              zone.zoneName
-            );
-            setNotifications(prev => [...prev, { ...notification, id: newPerson.id }]);
+            if (zone.type !== 'safe') {
+              const notification = generateNotification(
+                (floorData[currentFloor]?.people?.length || 0),
+                zone.type,
+                zone.zoneName
+              );
+              setNotifications(prev => [...prev, { ...notification, id: newPerson.id }]);
+            }
+          }
+          else if (mode === 'addSecurity') {
+            const newSecurity = { id: Date.now(), x, y };
+            setFloorData(prev => ({
+              ...prev,
+              [currentFloor]: {
+                ...prev[currentFloor],
+                security: [...(prev[currentFloor]?.security || []), newSecurity]
+              }
+            }));
+            setMessage(`Security personnel added on Floor ${currentFloor + 1}`);
+            // Update notifications after adding security
+            updateAllNotifications();
           }
           else if (mode === 'addZone') {
             const newPoints = [...currentPoints, { x, y }];
@@ -414,7 +515,8 @@
               }));
 
               setCurrentPoints([]);
-              setMessage("New hazard zone added - Updating all personnel status");
+              setMessage("New hazard zone added - Updating security response");
+              // Security notification will be handled by useEffect
             } else {
               setMessage(`Select point ${newPoints.length + 1} of 4 for hazard zone`);
             }
@@ -429,6 +531,10 @@
               hazardZones: prev[currentFloor].hazardZones.filter(zone => zone.id !== zoneId)
             }
           }));
+          // Remove associated security notifications
+          setNotifications(prev =>
+            prev.filter(n => n.id !== `security-${zoneId}`)
+          );
         };
 
         const removePerson = (personId) => {
@@ -442,6 +548,17 @@
           setNotifications(prev => prev.filter(n => n.id !== personId));
         };
 
+        const removeSecurity = (securityId) => {
+          setFloorData(prev => ({
+            ...prev,
+            [currentFloor]: {
+              ...prev[currentFloor],
+              security: prev[currentFloor].security.filter(security => security.id !== securityId)
+            }
+          }));
+          updateAllNotifications();
+        };
+
         const drawCanvas = () => {
           const canvas = canvasRef.current;
           if (!canvas || currentFloor === null) return;
@@ -453,9 +570,11 @@
             ctx.drawImage(floors[currentFloor], 0, 0, canvas.width, canvas.height);
           }
 
-          const currentFloorData = floorData[currentFloor] || { hazardZones: [], people: [] };
+          const currentFloorData = floorData[currentFloor] || { hazardZones: [], people: [], security: [] };
 
+          // Draw hazard zones
           currentFloorData.hazardZones.forEach(zone => {
+            // Draw buffer zone
             const outerPoints = calculateOuterPoints(zone.points);
             ctx.beginPath();
             ctx.moveTo(outerPoints[0].x, outerPoints[0].y);
@@ -466,6 +585,7 @@
             ctx.strokeStyle = "#FF8C00";
             ctx.stroke();
 
+            // Draw hazard zone
             ctx.beginPath();
             ctx.moveTo(zone.points[0].x, zone.points[0].y);
             zone.points.forEach(point => ctx.lineTo(point.x, point.y));
@@ -476,6 +596,7 @@
             ctx.lineWidth = 2;
             ctx.stroke();
 
+            // Draw zone name
             ctx.font = "14px Arial";
             ctx.fillStyle = "red";
             ctx.textAlign = "center";
@@ -484,6 +605,7 @@
             ctx.fillText(zone.name, centerX, centerY);
           });
 
+          // Draw current points for new zone
           if (currentPoints.length > 0) {
             ctx.beginPath();
             ctx.moveTo(currentPoints[0].x, currentPoints[0].y);
@@ -502,6 +624,24 @@
             });
           }
 
+          // Draw security personnel
+          currentFloorData.security.forEach((security, index) => {
+            ctx.beginPath();
+            ctx.arc(security.x, security.y, 8, 0, Math.PI * 2);
+            ctx.fillStyle = "blue";
+            ctx.fill();
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.font = "10px Arial";
+            ctx.fillStyle = "white";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(`S${index + 1}`, security.x, security.y);
+          });
+
+          // Draw people
           currentFloorData.people.forEach((person, index) => {
             const zone = getPointZone(person, currentFloor);
             ctx.beginPath();
@@ -528,7 +668,7 @@
             ctx.fillStyle = "white";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText(index + 1, person.x, person.y);
+            ctx.fillText(`P${index + 1}`, person.x, person.y);
           });
         };
 
@@ -541,13 +681,13 @@
           setCurrentPoints([]);
           setMode('none');
           setMessage(`Viewing Floor ${index + 1}`);
-          updateAllNotifications();
+          setTimeout(() => updateAllNotifications(), 0);
         };
 
         const handleReset = () => {
           setFloorData(prev => ({
             ...prev,
-            [currentFloor]: { people: [], hazardZones: [] }
+            [currentFloor]: { people: [], security: [], hazardZones: [] }
           }));
           setCurrentPoints([]);
           setMode('none');
@@ -623,7 +763,7 @@
                     ))}
                   </select>
 
-                  <button
+                  <button 
                     onClick={() => {
                       setMode(mode === 'addPeople' ? 'none' : 'addPeople');
                       setCurrentPoints([]);
@@ -633,7 +773,17 @@
                     {mode === 'addPeople' ? 'Stop Adding People' : 'Add People'}
                   </button>
 
-                  <button
+                  <button 
+                    onClick={() => {
+                      setMode(mode === 'addSecurity' ? 'none' : 'addSecurity');
+                      setCurrentPoints([]);
+                    }}
+                    className={`mode-button ${mode === 'addSecurity' ? 'active' : ''}`}
+                  >
+                    {mode === 'addSecurity' ? 'Stop Adding Security' : 'Add Security'}
+                  </button>
+                  
+                  <button 
                     onClick={() => {
                       setMode(mode === 'addZone' ? 'none' : 'addZone');
                       setCurrentPoints([]);
@@ -662,7 +812,6 @@
                     onClick={handleCanvasClick}
                     className="w-full cursor-crosshair"
                   />
-
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 mt-4">
@@ -677,6 +826,24 @@
                               onClick={() => removeZone(zone.id)}
                               className="delete-button"
                               title="Remove zone"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {floorData[currentFloor]?.security?.length > 0 && (
+                      <div className="mb-4">
+                        <h3 className="font-bold mb-2">Security Personnel on Floor {currentFloor + 1}:</h3>
+                        {floorData[currentFloor].security.map((security, index) => (
+                          <div key={security.id} className="hazard-zone bg-blue-100">
+                            Security {index + 1}
+                            <button 
+                              onClick={() => removeSecurity(security.id)}
+                              className="delete-button"
+                              title="Remove security"
                             >
                               ×
                             </button>
